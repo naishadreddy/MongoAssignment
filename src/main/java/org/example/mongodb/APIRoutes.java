@@ -266,11 +266,12 @@ public class APIRoutes {
     public Object cargoMove(Request req, Response res) {
         CargoDAL cargoDAL = new CargoDAL(mongoClient);
         String cargoId = req.splat()[0];
+        String location = req.splat()[1];
 
-        Boolean isUpdated = cargoDAL.cargoUnsetCourier(cargoId);
+        Boolean isUpdated = cargoDAL.cargoMove(cargoId,location);
         if (!isUpdated) {
             res.status(404);
-            String errorMsg = Objects.isNull(cargoDAL.getLastError()) ? "invalid cargo id" : cargoDAL.getLastError();
+            String errorMsg = cargoDAL.getLastError();
             return new Document("ok", false).append("error", errorMsg).toJson();
         }
         res.status(200);

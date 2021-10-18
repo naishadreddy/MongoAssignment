@@ -104,9 +104,9 @@ public class CargoDAL {
         return planesDAL.isPlaneValid(planeId);
     }
 
-    public boolean isPlaneLanded(String planeId){
+    public boolean isPlaneLandedInLocation(String planeId,String location){
         PlanesDAL planesDAL = new PlanesDAL(this.getMongoClient());
-        return planesDAL.isPlaneLanded(planeId);
+        return planesDAL.isPlaneLandedInLocation(planeId,location);
     }
 
     Document createNewCargo(String location, String destination){
@@ -172,6 +172,7 @@ public class CargoDAL {
             return null;
         }
     }
+
     Boolean cargoMove(String id,String location){
         try {
             Bson filter = Filters.eq(ID,new ObjectId(id));
@@ -180,16 +181,38 @@ public class CargoDAL {
                 this.lastError = "cargo not found ";
                 return false;
             }
-            if( !isCityValid(cargo.getString(location)) || !isPlaneValid(cargo.getString(COURIER)) || !isPlaneLanded(location)){
-                this.lastError = "invalid location or plane (or) Please check if the courier is landed in the current location ";
+            if( isCityValid(location.trim())){
+                if(isPlaneLandedInLocation(cargo.getString(COURIER),location)) {
+                    Bson updates = new Document("$set", new Document(LOCATION, location));
+                    FindOneAndUpdateOptions findOneAndUpdateOptions = new FindOneAndUpdateOptions().upsert(false).returnDocument(ReturnDocument.AFTER);
+                    Document cargoUpdated = cargoCollection.findOneAndUpdate(filter, updates, findOneAndUpdateOptions);
+                    return !Objects.isNull(cargoUpdated);
+                }
+                else{
+                    this.lastError = "invalid city plane not yet landed in the given location";
+                    return false;
+                }
+            }
+            else if(isPlaneValid(location.trim())){
+                if(isPlaneLandedInLocation(location.trim(),cargo.getString(LOCATION))) {
+                    Bson updates = new Document("$set", new Document(LOCATION, location));
+                    FindOneAndUpdateOptions findOneAndUpdateOptions = new FindOneAndUpdateOptions().upsert(false).returnDocument(ReturnDocument.AFTER);
+                    Document cargoUpdated = cargoCollection.findOneAndUpdate(filter, updates, findOneAndUpdateOptions);
+                    return !Objects.isNull(cargoUpdated);
+                }
+                else{
+                    this.lastError = "invalid courier for cargo plane not yet landed in the given location";
+                    return false;
+                }
+            }
+            else{
+                this.lastError = "invalid courier and city parametes please check again ";
                 return false;
             }
-
-            return !Objects.isNull(cargo);
         }
         catch (Exception me){
             this.lastError = me.toString();
-            return null;
+            return false;
         }
     }
 

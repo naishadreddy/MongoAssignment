@@ -115,15 +115,9 @@ public class PlanesDAL {
 
     public boolean isPlaneLandedInLocation(String planeId,String location) {
 
-        Bson filterStage = Filters.and(Filters.eq(ID,planeId));
-        Bson projectStage = Aggregates.project(Projections.fields(
-                Projections.excludeId(),
-                Projections.computed("firstCityLanded",new Document("$arrayElemAt",Arrays.asList("$route",0))),
-                Projections.include(LANDED)));
-        Bson finalProject = Aggregates.project(Projections.fields(Projections.computed("check",new Document("$eq",Arrays.asList("$firstCityLanded","$landed")))));
-        Document checkDoc = (Document) planesCollection.aggregate(Arrays.asList(filterStage,projectStage,finalProject)).first();
-
-        return !Objects.isNull(checkDoc) && checkDoc.getBoolean("check");
+        Bson filter = Filters.and(Filters.eq(ID,planeId),Filters.eq(LANDED,location));
+        Document checkDoc = (Document) planesCollection.find(filter).first();
+        return !Objects.isNull(checkDoc);
     }
 
     ArrayList<PlanesDAL> getAllPlanes() {
