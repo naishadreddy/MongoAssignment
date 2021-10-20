@@ -14,5 +14,5 @@ buildNumber.properties
 
 
 /src/test/
-/target
-/.idea
+target/
+.idea/
