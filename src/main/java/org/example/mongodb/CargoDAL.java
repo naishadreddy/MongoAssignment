@@ -1,14 +1,18 @@
 package org.example.mongodb;
 
+import com.mongodb.MongoException;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoCollection;
 import com.mongodb.client.MongoCursor;
 import com.mongodb.client.model.Filters;
 import com.mongodb.client.model.FindOneAndUpdateOptions;
 import com.mongodb.client.model.ReturnDocument;
+import net.jodah.failsafe.Failsafe;
 import org.bson.Document;
 import org.bson.conversions.Bson;
 import org.bson.types.ObjectId;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.Date;
@@ -28,7 +32,7 @@ public class CargoDAL {
     private final String IN_PROCESS = "in process";
     private final String DELIVERED = "delivered";
 
-
+    private Logger logger;
     private ObjectId id;
     private String destination;
     private String location;
@@ -76,6 +80,7 @@ public class CargoDAL {
     public CargoDAL(MongoClient mongoClient) {
         this.mongoClient = mongoClient;
         this.cargoCollection = mongoClient.getDatabase(DATABASE).getCollection(COLLECTION);
+        this.logger = LoggerFactory.getLogger(CargoDAL.class);
     }
 
     public CargoDAL(ObjectId id, String destination, String location, String courier, Date received, String status, MongoClient mongoClient) {
@@ -94,9 +99,18 @@ public class CargoDAL {
         this.location = location;
     }
 
+    public Boolean isCollectionEmpty(){
+        if(Objects.isNull(cargoCollection)) {
+            this.lastError = "empty cargoes collection ";
+            logger.error(this.lastError);
+            return true;
+        }
+        return false;
+    }
+
     public boolean isCityValid(String city) {
-        WorldCitiesDAL worldCitiesDAL = new WorldCitiesDAL(this.getMongoClient());
-        return worldCitiesDAL.isCityPresent(city);
+        CitiesDAL citiesDAL = new CitiesDAL(this.getMongoClient());
+        return !Objects.isNull(citiesDAL.getCitiesById(city));
     }
 
     public boolean isPlaneValid(String planeId) {
@@ -109,13 +123,23 @@ public class CargoDAL {
         return planesDAL.isPlaneLandedInLocation(planeId,location);
     }
 
+    public Boolean cargoUpdateRequest(Bson filter, Bson updates){
+
+        FindOneAndUpdateOptions findOneAndUpdateOptions = new FindOneAndUpdateOptions().upsert(false).returnDocument(ReturnDocument.AFTER);
+        Document plane = cargoCollection.findOneAndUpdate(filter, updates, findOneAndUpdateOptions);
+        return !Objects.isNull(plane);
+    }
+
     Document createNewCargo(String location, String destination){
 
         if(!(isCityValid(location) && isCityValid(destination))) {
             this.lastError ="cities are not valid please check again";
             return null;
         }
-        Document cargoDocument  = new Document(LOCATION,location).append(DESTINATION,destination);
+        Document cargoDocument  = new Document(LOCATION,location)
+                .append(DESTINATION,destination)
+                .append(COURIER,"null")
+                .append(STATUS,IN_PROCESS);
         try {
             cargoCollection.insertOne(cargoDocument);
             return  cargoDocument;
@@ -128,12 +152,14 @@ public class CargoDAL {
 
 
     Boolean cargoDelivered(String id){
+        if(isCollectionEmpty())
+            return false;
         try {
             Bson filter = Filters.eq(ID,new ObjectId(id));
             Bson updates = new Document("$set",new Document(STATUS,DELIVERED).append(RECEIVED,new Date()));
-            FindOneAndUpdateOptions findOneAndUpdateOptions = new FindOneAndUpdateOptions().upsert(false).returnDocument(ReturnDocument.AFTER);
-            Document cargo = cargoCollection.findOneAndUpdate(filter, updates, findOneAndUpdateOptions);
-            return !Objects.isNull(cargo);
+
+            // Retry mechanism to push updates
+            return Failsafe.with(CommonUtils.retryMethod()).get(() -> cargoUpdateRequest(filter,updates));
         }
         catch (Exception me){
             this.lastError = me.toString();
@@ -149,9 +175,7 @@ public class CargoDAL {
         try {
             Bson filter = Filters.eq(ID,new ObjectId(id));
             Bson updates = new Document("$set",new Document(COURIER,planeId));
-            FindOneAndUpdateOptions findOneAndUpdateOptions = new FindOneAndUpdateOptions().upsert(false).returnDocument(ReturnDocument.AFTER);
-            Document cargo = cargoCollection.findOneAndUpdate(filter, updates, findOneAndUpdateOptions);
-            return !Objects.isNull(cargo);
+            return Failsafe.with(CommonUtils.retryMethod()).get(() -> cargoUpdateRequest(filter,updates));
         }
         catch (Exception me){
             this.lastError = me.toString();
@@ -163,9 +187,8 @@ public class CargoDAL {
         try {
             Bson filter = Filters.eq(ID,new ObjectId(id));
             Bson updates = new Document("$set",new Document(COURIER,null));
-            FindOneAndUpdateOptions findOneAndUpdateOptions = new FindOneAndUpdateOptions().upsert(false).returnDocument(ReturnDocument.AFTER);
-            Document cargo = cargoCollection.findOneAndUpdate(filter, updates, findOneAndUpdateOptions);
-            return !Objects.isNull(cargo);
+            // Retry mechanism to push updates
+            return Failsafe.with(CommonUtils.retryMethod()).get(() -> cargoUpdateRequest(filter,updates));
         }
         catch (Exception me){
             this.lastError = me.toString();
@@ -184,9 +207,8 @@ public class CargoDAL {
             if( isCityValid(location.trim())){
                 if(isPlaneLandedInLocation(cargo.getString(COURIER),location)) {
                     Bson updates = new Document("$set", new Document(LOCATION, location));
-                    FindOneAndUpdateOptions findOneAndUpdateOptions = new FindOneAndUpdateOptions().upsert(false).returnDocument(ReturnDocument.AFTER);
-                    Document cargoUpdated = cargoCollection.findOneAndUpdate(filter, updates, findOneAndUpdateOptions);
-                    return !Objects.isNull(cargoUpdated);
+                    // Retry mechanism to push updates
+                    return Failsafe.with(CommonUtils.retryMethod()).get(() -> cargoUpdateRequest(filter,updates));
                 }
                 else{
                     this.lastError = "invalid city plane not yet landed in the given location";
@@ -196,9 +218,8 @@ public class CargoDAL {
             else if(isPlaneValid(location.trim())){
                 if(isPlaneLandedInLocation(location.trim(),cargo.getString(LOCATION))) {
                     Bson updates = new Document("$set", new Document(LOCATION, location));
-                    FindOneAndUpdateOptions findOneAndUpdateOptions = new FindOneAndUpdateOptions().upsert(false).returnDocument(ReturnDocument.AFTER);
-                    Document cargoUpdated = cargoCollection.findOneAndUpdate(filter, updates, findOneAndUpdateOptions);
-                    return !Objects.isNull(cargoUpdated);
+                    // Retry mechanism to push updates
+                    return Failsafe.with(CommonUtils.retryMethod()).get(() -> cargoUpdateRequest(filter,updates));
                 }
                 else{
                     this.lastError = "invalid courier for cargo plane not yet landed in the given location";
@@ -222,15 +243,14 @@ public class CargoDAL {
             return null;
         }
         Bson filter = Filters.and(Filters.eq(LOCATION,location),Filters.ne(STATUS,DELIVERED));
-        ArrayList<Document> cargos = new ArrayList<Document>();
+        ArrayList<Document> cargos = new ArrayList<>();
         try(MongoCursor<Document> cursor = cargoCollection.find(filter).cursor()) {
             while (cursor.hasNext()){
                 Document c = cursor.next();
-                cargos.add(c.append(ID,c.getObjectId(ID).toHexString()));
+                cargos.add(c.append("id",c.getObjectId(ID).toHexString()).append(ID,null));
             }
         }
         return cargos;
-
     }
 
 }

@@ -1,20 +1,9 @@
 package org.example.mongodb;
 
-// import static spark.Spark.after;
-// import static spark.Spark.put;
-// import static spark.Spark.post;
-// import static spark.Spark.get;
-// import static spark.Spark.delete;
-// import static spark.Spark.port;
+
 import static spark.Spark.*;
 import com.mongodb.MongoClientSettings;
 import com.mongodb.MongoCredential;
-import java.net.URL;
-import java.nio.file.Files;
-import java.nio.file.Paths;
-import java.nio.charset.Charset;
-import java.io.IOException;
-import java.net.URISyntaxException;
 
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -22,19 +11,26 @@ import java.util.concurrent.Executors;
 import java.util.logging.LogManager;
 
 import com.mongodb.ConnectionString;
-import com.mongodb.MongoCredential;
 import com.mongodb.client.MongoClients;
 import com.mongodb.client.MongoClient;
-import com.mongodb.client.MongoDatabase;
+import com.mongodb.client.MongoCollection;
+import com.mongodb.client.MongoCursor;
+import com.mongodb.client.model.Indexes;
+import org.bson.Document;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.bridge.SLF4JBridgeHandler;
 
 
 public class WebService {
-	static final String version = "0.0.1";
-	static Logger logger;
+	private static final String version = "0.0.1";
+	private static Logger logger;
 	private static String static_dir;
+	private final static  String INDEX_POSITION_2D_CITY = "position_2dsphere";
+	private final static String INDEX_LOCATION_CARGO = "location_status_1";
+	private final static String POSITION = "position";
+	private final static String LOCATION = "location";
+	private final static String STATUS = "status";
 
 	public static int ordinalIndexOf(String str, String substr, int n) {
 		int pos = -1;
@@ -64,6 +60,7 @@ public class WebService {
 
         }
         MongoClient mongoClient = createMongoClient();
+		createRequiredIndexes(mongoClient);
 
 		APIRoutes apiRoutes = new APIRoutes(mongoClient);
 			// *** PLANES ***
@@ -109,7 +106,7 @@ public class WebService {
 			// *** CITIES ***
 				//Fetch ALL cities
 				// E.G. curl -X GET http://localhost:5000/cities
-				get("/cities", (req,res) -> apiRoutes.getCities(req,res));
+				get("/cities", apiRoutes::getCities);
 
 			//Fetch n neighboring cities by ID
 			// E.G. curl -X GET http://localhost:5000/cities/*/neighbors/*
@@ -153,9 +150,22 @@ public class WebService {
 			after((req, res) -> {
 				res.type("application/json");
 			});
-		
+
+		//Change Stream background process to capture distance and duration
+		StartWorkers(mongoClient);
 
 		return;
+	}
+
+	private static void StartWorkers(MongoClient mongoClient)
+	{
+		int nThreads = 1; //How many workers
+		ExecutorService simexec = Executors.newFixedThreadPool(nThreads);
+		for (int workerno = 0; workerno < nThreads; workerno++) {
+			simexec.execute(new RunChangeStreamTask(workerno,mongoClient));
+
+		}
+		simexec.shutdown();
 	}
 
 	public static MongoClient createMongoClient() {
@@ -168,8 +178,32 @@ public class WebService {
 				.credential(credential)
 				.build();
 
-		MongoClient mongoClient = MongoClients.create(settings);
-		return mongoClient;
+		return MongoClients.create(settings);
 	}
 
-}
+	public static void createRequiredIndexes(MongoClient mongoClient){
+		    CitiesDAL cities = new CitiesDAL(mongoClient);
+		    CargoDAL cargos = new CargoDAL(mongoClient);
+
+		System.out.println("create index "+INDEX_POSITION_2D_CITY);
+			if(!isIndexCreated(cities.cityCollection,INDEX_POSITION_2D_CITY)) {
+				System.out.println("create index "+INDEX_POSITION_2D_CITY);
+				cities.cityCollection.createIndex(Indexes.geo2dsphere(POSITION));
+			}
+
+			if(!isIndexCreated(cargos.cargoCollection,INDEX_LOCATION_CARGO))
+				cargos.cargoCollection.createIndex(Indexes.compoundIndex(new Document(LOCATION,1).append(STATUS,1)));
+
+		}
+
+		public static Boolean isIndexCreated(MongoCollection coll,String indexName){
+
+			MongoCursor<Document> indexCursor =  coll.listIndexes().cursor();
+			while(indexCursor.hasNext()){
+				if(indexCursor.next().getString("name").equalsIgnoreCase(indexName))
+				return true;
+			}
+		  return false;
+		}
+	}
+

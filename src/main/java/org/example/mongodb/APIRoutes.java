@@ -3,49 +3,37 @@ package org.example.mongodb;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoDatabase;
 import org.bson.Document;
-import org.bson.json.JsonMode;
-import org.bson.json.JsonWriterSettings;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import spark.Request;
 import spark.Response;
 import com.google.gson.*;
 
-import java.time.Instant;
-import java.time.ZoneOffset;
-import java.time.ZonedDateTime;
-import java.time.format.DateTimeFormatter;
+
 import java.util.ArrayList;
-import java.util.Base64;
 import java.util.Objects;
-import java.util.stream.Collectors;
 
 public class APIRoutes {
     
     private final MongoClient mongoClient ;
     private final MongoDatabase mongoDatabase ;
+    private final static Logger logger = LoggerFactory.getLogger(APIRoutes.class);
     
     APIRoutes(MongoClient mongoClient){
         this.mongoClient = mongoClient;
        this.mongoDatabase =  mongoClient.getDatabase("logistics");
     }
 
-    JsonWriterSettings plainJSON = JsonWriterSettings.builder().outputMode(JsonMode.RELAXED)
-            .binaryConverter((value, writer) -> writer.writeString(Base64.getEncoder().encodeToString(value.getData())))
-            .dateTimeConverter((value, writer) -> {
-                ZonedDateTime zonedDateTime = Instant.ofEpochMilli(value).atZone(ZoneOffset.UTC);
-                writer.writeString(DateTimeFormatter.ISO_DATE_TIME.format(zonedDateTime));
-            }).decimal128Converter((value, writer) -> writer.writeString(value.toString()))
-            .objectIdConverter((value, writer) -> writer.writeString(value.toHexString()))
-            .symbolConverter((value, writer) -> writer.writeString(value)).build();
-
     public Object getPlanes(Request req, Response res) {
 
         PlanesDAL planesDAL = new PlanesDAL(mongoClient);
         if(Objects.isNull(planesDAL.getAllPlanes())){
             res.status(404);
-            return new Document("ok", false).append("error", "empty planes collection").toJson();
+            logger.error(planesDAL.getLastError());
+            return new Document("ok", false).append("error", planesDAL.getLastError()).toJson();
         }
         ArrayList<PlanesDAL> planes = planesDAL.getAllPlanes();
-        ArrayList<Document> planesDoc = new ArrayList<Document>();
+        ArrayList<Document> planesDoc = new ArrayList<>();
         for(PlanesDAL plane : planes){
             Document planeBSON = new Document("callsign",plane.getId())
                     .append("currentLocation",plane.getCurrentLocation())
@@ -63,7 +51,8 @@ public class APIRoutes {
         PlanesDAL plane = planesDAL.getPlanesById(planeId);
         if(Objects.isNull(plane)){
             res.status(404);
-            return new Document("ok", false).append("error", "no document found with given city name").toJson();
+            logger.error(planesDAL.getLastError());
+            return new Document("ok", false).append("error", planesDAL.getLastError()).toJson();
         }
         Document planeBSON  = new Document("callsign",plane.getId())
                 .append("currentLocation",plane.getCurrentLocation())
@@ -83,7 +72,8 @@ public class APIRoutes {
         if(!isUpdated){
             res.status(404);
             String errorMsg = Objects.isNull(planesDAL.getLastError())? "invalid cargo id":planesDAL.getLastError();
-            return new Document("ok", false).append("error" ,errorMsg).toJson();
+            logger.error(" error updating plane location "+planesDAL.getLastError());
+            return new Document("ok", false).append("error", planesDAL.getLastError()).toJson();
         }
 
         res.status(200);
@@ -99,8 +89,9 @@ public class APIRoutes {
         Boolean isUpdated = planesDAL.updatePlaneLocationAndLanding(planeId,location,heading,landed);
         if(!isUpdated){
             res.status(404);
-            String errorMsg = Objects.isNull(planesDAL.getLastError())? "invalid cargo id":planesDAL.getLastError();
-            return new Document("ok", false).append("error" ,errorMsg).toJson();
+            String errorMsg = Objects.isNull(planesDAL.getLastError())? "invalid plane ID":planesDAL.getLastError();
+            logger.error(" error updating plane location and landing" + planesDAL.getLastError());
+            return new Document("ok", false).append("error", planesDAL.getLastError()).toJson();
         }
 
         res.status(200);
@@ -114,8 +105,8 @@ public class APIRoutes {
             Boolean isUpdated = b ? planesDAL.replacePlaneRoute(planeId, city) : planesDAL.addPlaneRoute(planeId,city);
             if (!isUpdated) {
                 res.status(404);
-                String errorMsg = Objects.isNull(planesDAL.getLastError()) ? "invalid cargo id" : planesDAL.getLastError();
-                return new Document("ok", false).append("error", errorMsg).toJson();
+                logger.error(" error adding plane route " + planesDAL.getLastError());
+                return new Document("ok", false).append("error", planesDAL.getLastError()).toJson();
             }
             res.status(200);
             return "";
@@ -127,8 +118,8 @@ public class APIRoutes {
         Boolean isUpdated = planesDAL.removeFirstPlaneRoute(planeId);
         if (!isUpdated) {
             res.status(404);
-            String errorMsg = Objects.isNull(planesDAL.getLastError()) ? "invalid cargo id" : planesDAL.getLastError();
-            return new Document("ok", false).append("error", errorMsg).toJson();
+            logger.error(" error removing plane route " + planesDAL.getLastError());
+            return new Document("ok", false).append("error", planesDAL.getLastError()).toJson();
         }
         res.status(200);
         return "";
@@ -140,10 +131,11 @@ public class APIRoutes {
         CitiesDAL citiesDAL = new CitiesDAL(mongoClient);
        if(Objects.isNull(citiesDAL.getCities())){
             res.status(404);
+            logger.error("empty cities collection");
             return new Document("ok", false).append("error", "empty cities collection").toJson();
         }
         ArrayList<CitiesDAL> cities = citiesDAL.getCities();
-       ArrayList<Document> cityDoc = new ArrayList<Document>();
+       ArrayList<Document> cityDoc = new ArrayList<>();
        for(CitiesDAL city : cities){
            Document cityBSON = new Document("name",city.getId())
                                    .append("location",city.getPosition())
@@ -155,35 +147,33 @@ public class APIRoutes {
 
     public Object getCityById(Request req, Response res) {
 
-
-        System.out.print("inside getcitybyid methid ");
         CitiesDAL citiesDAL = new CitiesDAL(mongoClient);
         String city = req.splat()[0];
-
-        if(Objects.isNull(citiesDAL.getCitiesById(city))){
+        CitiesDAL cityDAL = citiesDAL.getCitiesById(city);
+        if(Objects.isNull(cityDAL)){
             res.status(404);
+            logger.error("city not found");
             return new Document("ok", false).append("error", "no document found with given city name").toJson();
         }
 
-        CitiesDAL cityBSON = citiesDAL.getCitiesById(city);
+        Document cityBSON = new Document("name",cityDAL.getId())
+                .append("location",cityDAL.getPosition())
+                .append("country",cityDAL.getCountry());
+
         return  new Gson().toJson(cityBSON);
     }
 
     public Object getNeighboringCitiesById(Request req, Response res) {
-
-        System.out.print("inside negihbprinh methid ");
         CitiesDAL citiesDAL = new CitiesDAL(mongoClient);
         String city = req.splat()[0];
         Integer count = Integer.parseInt(req.splat()[1]);
         if(Objects.isNull(citiesDAL.getCities())){
             res.status(404);
+            logger.error("empty cities collection");
             return new Document("ok", false).append("error", "empty cities collection").toJson();
         }
-
-
-
-        ArrayList<CitiesDAL> cities = citiesDAL.getNeighboringCitiesById(city,count);;
-        ArrayList<Document> cityDoc = new ArrayList<Document>();
+        ArrayList<CitiesDAL> cities = citiesDAL.getNeighboringCitiesById(city,count);
+        ArrayList<Document> cityDoc = new ArrayList<>();
         for(CitiesDAL c : cities){
             Document cityBSON = new Document("name",c.getId())
                     .append("location",c.getPosition())
@@ -191,17 +181,17 @@ public class APIRoutes {
             cityDoc.add(cityBSON);
         }
 
-        return new Gson().toJson(cityDoc);
+        return  new Document("neighbors", cityDoc).toJson();
     }
 
     public Object getCargoAtLocation(Request req, Response res) {
         CargoDAL cargoDAL = new CargoDAL(mongoClient);
         String location = req.splat()[0];
-
         ArrayList<Document> cargos = cargoDAL.getCargoByLocation(location);
         if(Objects.isNull(cargos)){
             res.status(404);
-            return new Document("ok", false).append("error", cargoDAL.getLastError()).toJson();
+            logger.error(cargoDAL.getLastError());
+            return  new Gson().toJson(new ArrayList<>());
         }
         return  new Gson().toJson(cargos);
     }
@@ -214,6 +204,7 @@ public class APIRoutes {
        Document doc =  cargoDAL.createNewCargo(location,destination);
         if(Objects.isNull(doc)){
             res.status(404);
+            logger.error("creating cargo failed "+cargoDAL.getLastError());
             return new Document("ok", false).append("error",cargoDAL.getLastError()).toJson();
         }
 
@@ -227,7 +218,8 @@ public class APIRoutes {
         Boolean isUpdated = cargoDAL.cargoDelivered(cargoId);
         if (!isUpdated) {
             res.status(404);
-            String errorMsg = Objects.isNull(cargoDAL.getLastError()) ? "invalid cargo id" : cargoDAL.getLastError();
+            String errorMsg = cargoDAL.getLastError();
+            logger.error("error updating cargo destination " +errorMsg);
             return new Document("ok", false).append("error", errorMsg).toJson();
         }
         res.status(200);
@@ -242,7 +234,8 @@ public class APIRoutes {
         Boolean isUpdated = cargoDAL.cargoAssignCourier(cargoId,planeId);
         if (!isUpdated) {
             res.status(404);
-            String errorMsg = Objects.isNull(cargoDAL.getLastError()) ? "invalid cargo id" : cargoDAL.getLastError();
+            String errorMsg = cargoDAL.getLastError();
+            logger.error("error assigning courier to cargo " +errorMsg);
             return new Document("ok", false).append("error", errorMsg).toJson();
         }
         res.status(200);
@@ -256,7 +249,8 @@ public class APIRoutes {
         Boolean isUpdated = cargoDAL.cargoUnsetCourier(cargoId);
         if (!isUpdated) {
             res.status(404);
-            String errorMsg = Objects.isNull(cargoDAL.getLastError()) ? "invalid cargo id" : cargoDAL.getLastError();
+            String errorMsg =  cargoDAL.getLastError();
+            logger.error("error setting courier to cargo " +errorMsg);
             return new Document("ok", false).append("error", errorMsg).toJson();
         }
         res.status(200);
@@ -272,6 +266,7 @@ public class APIRoutes {
         if (!isUpdated) {
             res.status(404);
             String errorMsg = cargoDAL.getLastError();
+            logger.error("error moving cargo " +errorMsg);
             return new Document("ok", false).append("error", errorMsg).toJson();
         }
         res.status(200);

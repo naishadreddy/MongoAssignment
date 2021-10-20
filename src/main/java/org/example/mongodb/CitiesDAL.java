@@ -1,6 +1,5 @@
 package org.example.mongodb;
 
-import com.mongodb.client.FindIterable;
 import com.mongodb.client.MongoClient;
 import com.mongodb.ReadConcern;
 import com.mongodb.client.MongoCollection;
@@ -8,9 +7,12 @@ import com.mongodb.client.MongoCursor;
 import com.mongodb.client.model.*;
 import org.bson.Document;
 import org.bson.conversions.Bson;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
 import java.util.Objects;
 
 public class CitiesDAL {
@@ -23,10 +25,11 @@ public class CitiesDAL {
     private final String COLLECTION ="cities";
 
 
-
+    Logger logger;
     private String id;
     private String country;
     private ArrayList<Double> position;
+    private String lastError;
 
     MongoClient mongoClient;
     MongoCollection<Document> cityCollection;
@@ -34,6 +37,7 @@ public class CitiesDAL {
     public CitiesDAL(MongoClient mongoClient) {
         this.mongoClient = mongoClient;
         this.cityCollection = mongoClient.getDatabase(DATABASE).getCollection(COLLECTION).withReadConcern(ReadConcern.MAJORITY);
+        this.logger =  LoggerFactory.getLogger(CitiesDAL.class);
     }
 
     public CitiesDAL(MongoClient mongoClient,String id, String country, ArrayList<Double> position) {
@@ -62,21 +66,30 @@ public class CitiesDAL {
         return position;
     }
 
-     void create2dCoordinateIndex(){
-        MongoCursor<Document> indexCursor =  cityCollection.listIndexes().cursor();
-        while(indexCursor.hasNext()){
-            if(indexCursor.next().getString("name").equalsIgnoreCase(INDEX_NAME));
-              return;
+    public Boolean isCollectionEmpty(){
+        if(Objects.isNull(cityCollection)) {
+            this.lastError = "empty cities collection ";
+            logger.error(this.lastError);
+            return true;
         }
-        cityCollection.createIndex(Indexes.geo2d(POSITION));
+        return false;
+    }
+
+    List<Double> getCoordinatesFromCity(String city){
+        if(isCollectionEmpty())
+            return null;
+        Document cityDoc =  cityCollection.find(Filters.eq(ID,city)).first();
+        if(Objects.isNull(cityDoc) || Objects.isNull(cityDoc.get(POSITION)))
+            return null;
+        return (List<Double>)cityDoc.get(POSITION);
     }
 
     ArrayList<CitiesDAL> getCities() {
-        if(Objects.isNull(cityCollection) || cityCollection.countDocuments()  == 0){
+        if(isCollectionEmpty()){
             return null;
         }
 
-        ArrayList<CitiesDAL> cities = new ArrayList<CitiesDAL>();
+        ArrayList<CitiesDAL> cities = new ArrayList<>();
         try(MongoCursor<Document> cursor = cityCollection.find().cursor()) {
             while (cursor.hasNext()){
                 Document c = cursor.next();
@@ -87,40 +100,35 @@ public class CitiesDAL {
     }
 
     CitiesDAL getCitiesById(String cityName) {
-        if(Objects.isNull(cityCollection) || cityCollection.countDocuments()  == 0){
-            return null;
-        }
-
-        Bson filter = Filters.eq("_id",cityName);
-        Document cityDoc = cityCollection.find(filter).first();
-        if(Objects.isNull(cityDoc))
-            return null;
-        CitiesDAL city = new CitiesDAL(cityDoc.getString(ID),cityDoc.getString(COUNTRY), (ArrayList<Double>) cityDoc.get(POSITION));
-        return city;
-    }
-
-    ArrayList<CitiesDAL> getNeighboringCitiesById(String cityName,int count) {
-
-        if(Objects.isNull(cityCollection) || cityCollection.countDocuments()  == 0){
+        if(isCollectionEmpty()){
             return null;
         }
 
         Bson filter = Filters.eq(ID,cityName);
         Document cityDoc = cityCollection.find(filter).first();
-        ArrayList<Double> postionArray = (ArrayList<Double>) cityDoc.get(POSITION);
         if(Objects.isNull(cityDoc))
             return null;
+        return new CitiesDAL(cityDoc.getString(ID),cityDoc.getString(COUNTRY), (ArrayList<Double>) cityDoc.get(POSITION));
+    }
 
-        ArrayList<CitiesDAL> cities = new ArrayList<CitiesDAL>();
-        create2dCoordinateIndex();
-        Document geoNearStage = new Document("$geoNear",new Document("near",new Document("type","coordinates").append("coordinates",postionArray))
-                .append("key",POSITION).append("distanceField","'distance'").append("spherical",false));
+    ArrayList<CitiesDAL> getNeighboringCitiesById(String cityName,int count) {
+
+        if(isCollectionEmpty()){
+            return null;
+        }
+        Bson filter = Filters.eq(ID,cityName);
+        Document cityDoc = cityCollection.find(filter).first();
+        if(Objects.isNull(cityDoc))
+            return null;
+        ArrayList<Double> positionArray = (ArrayList<Double>) cityDoc.get(POSITION);
+
+        ArrayList<CitiesDAL> cities = new ArrayList<>();
+        Document geoNearStage = new Document("$geoNear",new Document("near",new Document("type","coordinates")
+                                                                                 .append("coordinates",positionArray))
+                                                                                 .append("distanceField","distance")
+                                                                                 .append("key",POSITION)
+                                                                                 .append("spherical",false));
         Bson limitStage = Aggregates.limit(count);
-//        Bson projectStage = Aggregates.project( Projections.fields(
-//                                                   Projections.excludeId(),
-//                                                   Projections.computed("name","$_id"),
-//                Projections.computed("location","$position"),
-//                Projections.include("country")));
 
         try(MongoCursor<Document> cursor = cityCollection.aggregate(Arrays.asList(
                 geoNearStage,

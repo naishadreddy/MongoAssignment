@@ -9,6 +9,8 @@ import org.bson.types.ObjectId;
 
 import java.math.BigInteger;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
 import java.util.Objects;
 
 public class WorldCitiesDAL {
@@ -141,6 +143,17 @@ public class WorldCitiesDAL {
 
         Document cityDoc =  worldCitiesCollection.find(Filters.or(Filters.eq(CITY,city),Filters.eq(CITY_ASCII,city))).first();
         return !Objects.isNull(cityDoc);
+
+    }
+
+    List<Double> getCoordinatesFromCityName(String city){
+        if(Objects.isNull(worldCitiesCollection) ||  worldCitiesCollection.countDocuments() == 0)
+            return null;
+
+        Document cityDoc =  worldCitiesCollection.find(Filters.or(Filters.eq(CITY,city),Filters.eq(CITY_ASCII,city))).first();
+        if(Objects.isNull(cityDoc) || Objects.isNull(cityDoc.get("lat")) || Objects.isNull(cityDoc.get("lng")))
+            return null;
+        return Arrays.asList(cityDoc.getDouble("lat"),cityDoc.getDouble("lng"));
 
     }
 
