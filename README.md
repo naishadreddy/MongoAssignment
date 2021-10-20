@@ -24,10 +24,10 @@
 - Background ChangeStream cursor runs in background to update the distance travelled and time taken to cover the distance.
 
 
-##Retries 
+## Retries 
 - Failsafe package has been used to retry updates to collections only when an mongoException occurs.
 
-##logging 
+## logging 
 - s14j logging module is configured in all DAL classes.
 - modify /src/resources/logback.xml to change logging format and destination.
 
